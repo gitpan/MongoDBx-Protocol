@@ -1,0 +1,14 @@
+Changes
+LICENSE
+MANIFEST
+META.yml
+Makefile.PL
+README
+dist.ini
+lib/MongoDBx/Protocol.pm
+lib/MongoDBx/Protocol.pm~
+t.pl~
+t/main.t
+t/main.t~
+t/release-pod-coverage.t
+t/release-pod-syntax.t

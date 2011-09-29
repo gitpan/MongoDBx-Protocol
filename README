@@ -1,0 +1,13 @@
+
+
+This archive contains the distribution MongoDBx-Protocol,
+version 0.01:
+
+  pure perl implementation of MongoDB protocol
+
+This software is copyright (c) 2011 by Yury Zavarin.
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
+
+
