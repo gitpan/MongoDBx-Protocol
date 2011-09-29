@@ -1,7 +1,0 @@
-#!/usr/bin/perl
-
-use Test::More;
-
-use_ok('MongoX::Protocol');
-
-done_testing;

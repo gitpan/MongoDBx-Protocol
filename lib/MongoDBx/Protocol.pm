@@ -1,6 +1,6 @@
 package MongoDBx::Protocol;
 {
-  $MongoDBx::Protocol::VERSION = '0.01';
+  $MongoDBx::Protocol::VERSION = '0.02';
 }
 
 use strict;
@@ -370,7 +370,7 @@ MongoDBx::Protocol - pure perl implementation of MongoDB protocol
 
 =head1 VERSION
 
-version 0.01
+version 0.02
 
 =head1 SYNOPSIS
 
@@ -387,7 +387,7 @@ version 0.01
 
 =head1 DESCRIPTION
 
-This is a pure perl implementation of MongoDB protocol as described at L<http://http://www.mongodb.org/display/DOCS/Mongo+Wire+Protocol>.
+This is a pure perl implementation of MongoDB protocol as described at L<http://www.mongodb.org/display/DOCS/Mongo+Wire+Protocol>.
 Such modules as L<MongoDB> and L<AnyMongo> haven't public API for dealing with MongoDB protocol at low level. Using MongoDBx::Protocol you can encode/decode messages which you can send/recieve to/from MongoDB.
 
 This module doesn't try to work very effectively, for this purposes you should use some XS code from L<MongoDB> module.
@@ -582,7 +582,7 @@ Works only on 64-bit Perl. I'll fix it soon.
 
 =head1 SEE ALSO
 
-L<http://http://www.mongodb.org/display/DOCS/Mongo+Wire+Protocol>
+L<http://www.mongodb.org/display/DOCS/Mongo+Wire+Protocol>
 
 L<BSON>, L<MongoDB>, L<AnyMongo>
 

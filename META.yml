@@ -26,4 +26,4 @@ requires:
 resources:
   homepage: http://github.com/tadam/MongoDBx-Protocol
   repository: git://github.com/tadam/MongoDBx-Protocol.git
-version: 0.01
+version: 0.02
