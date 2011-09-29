@@ -1,6 +1,6 @@
 package MongoDBx::Protocol;
 {
-  $MongoDBx::Protocol::VERSION = '0.02';
+  $MongoDBx::Protocol::VERSION = '0.03';
 }
 
 use strict;
@@ -24,7 +24,7 @@ my $OP_CODES = {
     update       => 2001,
     insert       => 2002,
     query        => 2004,
-    getmore     => 2005,
+    getmore      => 2005,
     delete       => 2006,
     kill_cursors => 2007,
 };
@@ -33,26 +33,45 @@ foreach my $str (keys %$OP_CODES) {
    $OP_CODE2STR->{ $OP_CODES->{$str} } = $str;
 }
 
-my $FLAGS = {
-    # OP_UPDATE
-    Upsert      => 0,
-    MultiUpdate => 1,
+my $FLAG2BIT = {
+    update => {
+        Upsert      => 0,
+        MultiUpdate => 1,
+    },
 
-    # OP_INSERT
-    ContinueOnError => 0,
+    insert => {
+        ContinueOnError => 0,
+    },
 
-    # OP_QUERY
-    TailableCursor  => 1,
-    SlaveOk         => 2,
-    OplogReplay     => 3,
-    NoCursorTimeout => 4,
-    AwaitData       => 5,
-    Exhaust         => 6,
-    Partial         => 7,
+    query => {
+        TailableCursor  => 1,
+        SlaveOk         => 2,
+        OplogReplay     => 3,
+        NoCursorTimeout => 4,
+        AwaitData       => 5,
+        Exhaust         => 6,
+        Partial         => 7,
+    },
 
-    # OP_DELETE
-    SingleRemove => 0,
+    delete => {
+        SingleRemove => 0,
+    },
+
+    reply => {
+        CursorNotFound   => 0,
+        QueryFailure     => 1,
+        ShardConfigStale => 2,
+        AwaitCapable     => 3,
+    },
 };
+
+my $BIT2FLAG = {};
+foreach my $op_code_str (keys %$FLAG2BIT) {
+    foreach my $flag_name (keys %{$FLAG2BIT->{$op_code_str}}) {
+        my $bit_value = $FLAG2BIT->{$op_code_str}->{$flag_name};
+        $BIT2FLAG->{$op_code_str}->{$bit_value} = $flag_name;
+    }
+}
 
 my $REPLY_FLAGS = {
     0 => 'CursorNotFound',
@@ -85,13 +104,15 @@ sub update {
         update   => { type => HASHREF },
     });
 
+    my $op_code_str = 'update';
+
     my $msg = _int32(0) .
               _cstring($p->{fullCollectionName}) .
-              _flags($p->{flags}) .
+              _flags($p->{flags}, $op_code_str) .
               _documents($p->{selector}) .
               _documents($p->{update});
 
-    return $self->_with_header($p->{header}, \$msg, 'update');
+    return $self->_with_header($p->{header}, \$msg, $op_code_str);
 }
 
 
@@ -104,11 +125,13 @@ sub insert {
          documents => { type => ARRAYREF },
     });
 
-    my $msg = _flags($p->{flags}) .
+    my $op_code_str = 'insert';
+
+    my $msg = _flags($p->{flags}, $op_code_str) .
               _cstring($p->{fullCollectionName}) .
               _documents($p->{documents});
 
-    return $self->_with_header($p->{header}, \$msg, 'insert');
+    return $self->_with_header($p->{header}, \$msg, $op_code_str);
 
 }
 
@@ -125,14 +148,15 @@ sub query {
         returnFieldSelector => { type => HASHREF, optional => 1 },
     });
 
-    my $msg = _flags($p->{flags}) .
+    my $op_code_str = 'query';
+    my $msg = _flags($p->{flags}, $op_code_str) .
               _cstring($p->{fullCollectionName}) .
               _int32($p->{numberToSkip}) .
               _int32($p->{numberToReturn}) .
               _documents($p->{query}) .
               _documents($p->{returnFieldSelector});
 
-    return $self->_with_header($p->{header}, \$msg, 'query');
+    return $self->_with_header($p->{header}, \$msg, $op_code_str);
 }
 
 
@@ -164,12 +188,14 @@ sub delete {
         selector => { type => HASHREF },
     });
 
+    my $op_code_str = 'delete';
+
     my $msg = _int32(0) .
               _cstring($p->{fullCollectionName}) .
-              _flags($p->{flags}) .
+              _flags($p->{flags}, $op_code_str) .
               _documents($p->{selector});
 
-    return $self->_with_header($p->{header}, \$msg, 'delete');
+    return $self->_with_header($p->{header}, \$msg, $op_code_str);
 }
 
 
@@ -208,26 +234,229 @@ sub msg {
 }
 
 
-sub decode_reply {
+sub reply {
     my $self = shift;
-    my $reply = shift;
-    croak("Too small reply") if (length($reply) < (4*4 + 4 + 8 + 4 +4));
 
-    my $header = substr($reply, 0, 4*4, '');
-    my $responseFlags = substr($reply, 0, 4, '');
-    my $cursorID = substr($reply, 0, 8, '');
-    my $startingFrom = substr($reply, 0, 4, '');
-    my $numberReturned = substr($reply, 0, 4, '');
+    my $p = validate(@_, {
+        %$HEADER_FIELD,
+        responseFlags => { type => HASHREF, default => {} },
+        cursorID      => { type => SCALAR, regex => qr/^\d+$/o },
+        startingFrom  => { type => SCALAR, regex => qr/^\d+$/o, default => 0 },
+        documents     => { type => ARRAYREF },
+    });
 
-    my $documents = $reply;
+    my $op_code_str = 'reply';
+
+    my $msg = _flags($p->{responseFlags}, $op_code_str) .
+              _int64($p->{cursorID}) .
+              _int32($p->{startingFrom}) .
+              _int32( scalar @{$p->{documents}} ) .
+              _documents($p->{documents});
+
+    return $self->_with_header($p->{header}, \$msg, $op_code_str);
+}
+
+
+sub decode {
+    my $self = shift;
+    my ($data, $options) = @_;
+
+    croak "empty data" unless (defined($data));
+    croak "too small data" if (length($data) < 4);
+    my @a = unpack("C*", substr($data, 0, 4));
+    my $len = _decode_int32(substr($data, 0, 4));
+    if (length($data) != $len) {
+        die "can't parse data, real length of the data != length in the header";
+    }
+
+    my $header = _decode_header(substr($data, 0, 4*4, ''));
+
+    my $op_code = $header->{opCode};
+    my $decode_method = "_decode_${op_code}";
+    my $res = $self->$decode_method(\$data, $options);
+
+    $res->{header} = $header;
+
+    return $res;
+}
+
+sub _decode_update {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $zero = _decode_int32(substr($data, 0, 4, ''));
+    if ($zero != 0) {
+        croak("can't parse 'update' message: no zero int32");
+    }
+
+    my $coll;
+    ($data, $coll) = _decode_cstring($data);
+
+    my $flags = _decode_flags(substr($data, 0, 4, ''), 'update');
+    my $docs = _decode_documents(\$data, $options);
+    if (scalar(@$docs) != 2) {
+        croak "update message should contains only 2 docs";
+    }
 
     my $res = {
-        header         => _decode_header($header),
-        responseFlags  => _decode_flags($responseFlags),
-        cursorID       => _decode_int64($cursorID),
-        startingFrom   => _decode_int32($startingFrom),
-        numberReturned => _decode_int32($numberReturned),
-        documents      => _decode_documents($documents),
+        fullCollectionName => $coll,
+        flags              => $flags,
+        selector           => $docs->[0],
+        update             => $docs->[1],
+    };
+
+    return $res;
+}
+
+sub _decode_insert {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $flags = _decode_flags(substr($data, 0, 4, ''), 'insert');
+    my $coll;
+    ($data, $coll) = _decode_cstring($data);
+    my $docs = _decode_documents(\$data, $options);
+
+    my $res = {
+        flags => $flags,
+        fullCollectionName => $coll,
+        documents => $docs,
+    };
+
+    return $res;
+}
+
+sub _decode_query {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $flags = _decode_flags(substr($data, 0, 4, ''), 'query');
+
+    my $coll;
+    ($data, $coll) = _decode_cstring($data);
+
+    my $numberToSkip = _decode_int32(substr($data, 0, 4, ''));
+    my $numberToReturn = _decode_int32(substr($data, 0, 4, ''));
+
+    my $docs = _decode_documents(\$data, $options);
+    if (scalar(@$docs) !~ /^1|2$/) {
+        croak "query message should contains only 1 or 2 docs";
+    }
+
+    my $res = {
+        flags              => $flags,
+        fullCollectionName => $coll,
+        numberToSkip       => $numberToSkip,
+        numberToReturn     => $numberToReturn,
+        query              => $docs->[0],
+    };
+    if ($docs->[1]) {
+        $res->{returnFieldSelector} = $docs->[1];
+    };
+
+    return $res;
+}
+
+sub _decode_getmore {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $zero = _decode_int32(substr($data, 0, 4, ''));
+    if ($zero != 0) {
+        croak("can't parse 'getmore' message: no zero int32");
+    }
+
+    my $coll;
+    ($data, $coll) = _decode_cstring($data);
+
+    my $res = {
+        fullCollectionName => $coll,
+        numberToReturn     => _decode_int32(substr($data, 0, 4, '')),
+        cursorID           => _decode_int64(substr($data, 0, 8, '')),
+    };
+
+    return $res;
+}
+
+sub _decode_delete {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $zero = _decode_int32(substr($data, 0, 4, ''));
+    if ($zero != 0) {
+        croak("can't parse 'delete' message: no zero int32");
+    }
+
+    my $coll;
+    ($data, $coll) = _decode_cstring($data);
+
+    my $flags = _decode_flags(substr($data, 0, 4, ''), 'delete');
+
+    my $docs = _decode_documents(\$data, $options);
+    if (scalar(@$docs) != 1) {
+        croak "delete message should contains only 1 doc";
+    }
+
+    my $res = {
+        fullCollectionName => $coll,
+        flags              => $flags,
+        selector           => $docs->[0],
+    };
+
+    return $res;
+}
+
+sub _decode_kill_cursors {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $zero = _decode_int32(substr($data, 0, 4, ''));
+    if ($zero != 0) {
+        croak("can't parse 'kill_cursors' message: no zero int32");
+    }
+
+    my $n_cursors = _decode_int32(substr($data, 0, 4, ''));
+    if (length($data) != $n_cursors * 8) {
+        croak("real number of cursors != number of cursors in the message");
+    }
+
+    my @cursors;
+    while ($data) {
+        push @cursors, _decode_int64(substr($data, 0, 8, ''));
+    }
+
+    my $res = {
+        numberOfCursorIDs => $n_cursors,
+        cursorIDs         => \@cursors,
+    };
+
+    return $res;
+}
+
+sub _decode_msg {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $msg;
+    ($data, $msg) = _decode_cstring($data);
+
+    if (length($data) > 0) {
+        croak("can't parse 'msg' message: there are additional bytes at the end");
+    }
+
+    return { message => $msg };
+}
+
+sub _decode_reply {
+    my ($self, $data_ref, $options) = @_;
+    my $data = $$data_ref;
+
+    my $res = {
+        responseFlags  => _decode_flags(substr($data, 0, 4, ''), 'reply'),
+        cursorID       => _decode_int64(substr($data, 0, 8, '')),
+        startingFrom   => _decode_int32(substr($data, 0, 4, '')),
+        numberReturned => _decode_int32(substr($data, 0, 4, '')),
+        documents      => _decode_documents(\$data, $options),
     };
 
     return $res;
@@ -266,38 +495,56 @@ sub _decode_int64 {
 }
 
 sub _decode_flags {
-    my $flags = shift;
+    my ($flags, $op_code_str) = @_;
 
     my $v = Bit::Vector->new(32);
     $v->from_Dec(_decode_int32($flags));
 
     my $str_flags = {};
-    foreach my $reply_flag_bit (keys %$REPLY_FLAGS) {
-        my $reply_flag = $REPLY_FLAGS->{$reply_flag_bit};
-        my $reply_flag_value = 0;
+    my $all_op_code_bits = $BIT2FLAG->{$op_code_str};
+    foreach my $reply_flag_bit (keys %$all_op_code_bits) {
         if ($v->bit_test($reply_flag_bit)) {
-            $reply_flag_value = 1;
+            my $reply_flag = $all_op_code_bits->{$reply_flag_bit};
+            $str_flags->{$reply_flag} = 1;
         }
-        $str_flags->{$reply_flag} = $reply_flag_value;
     }
 
     return $str_flags;
 }
 
 sub _decode_documents {
-    my $docs_str = shift;
+    my ($data_ref, $options) = @_;
+    my %bson_options;
+    if ($options && $options->{ixhash}) {
+        %bson_options = (ixhash => 1);
+    }
+
+    my $data = $$data_ref;
 
     my @docs = ();
-    while (length($docs_str)) {
-        my $l = _decode_int32(substr($docs_str, 0, 4));
-        if (length($docs_str) < $l) {
+    while (length($data)) {
+        my $l = _decode_int32(substr($data, 0, 4));
+        if (length($data) < $l) {
             croak "Incorrect length of bson document";
         }
-        my $doc_str = substr($docs_str, 0, $l, '');
-        push @docs, BSON::decode($doc_str);
+        my $doc_str = substr($data, 0, $l, '');
+        push @docs, BSON::decode($doc_str, %bson_options);
     }
 
     return \@docs;
+}
+
+sub _decode_cstring {
+    my $data = shift;
+    my $idx = index($data, "\x00");
+    if ($idx < 0) {
+        croak("Can't find string terminator");
+    }
+
+    my $string = substr($data, 0, $idx);
+    substr($data, 0, $idx + 1, '');
+
+    return ($data, $string);
 }
 
 sub _cstring {
@@ -316,10 +563,12 @@ sub _int64 {
 }
 
 sub _flags {
-    my $flags = shift;
+    my ($flags, $op_code_str) = @_;
     my $v = Bit::Vector->new(32);
+
+    my $all_op_code_flags = $FLAG2BIT->{$op_code_str};
     while (my ($flag_name, $flag_value) = each %$flags) {
-        if (defined(my $flag_bit = $FLAGS->{$flag_name}) && $flag_value) {
+        if (defined(my $flag_bit = $all_op_code_flags->{$flag_name}) && $flag_value) {
             $v->Bit_On($flag_bit);
         }
     }
@@ -370,7 +619,7 @@ MongoDBx::Protocol - pure perl implementation of MongoDB protocol
 
 =head1 VERSION
 
-version 0.02
+version 0.03
 
 =head1 SYNOPSIS
 
@@ -540,7 +789,7 @@ Arrayref of cursorIDs.
 
 =item msg($options)
 
-C<$options> contains
+C<$options> contains:
 
 =over 4
 
@@ -554,25 +803,35 @@ MongoDB docs marked this method as deprecated for clients.
 
 =back
 
-=item decode_reply($reply_str)
+=item reply($options)
 
-Decodes binary response C<$reply_str> from MongoDB and returns hashref with a following structure:
+C<$options> contains:
 
 =over 4
 
-=item I<header>
+=item I<header> (optional);
 
-=item I<responseFlags>
+=item I<responseFlags> (optional)
+
+Possible flags are: C<CursorNotFound>, C<QueryFailure>, C<ShardConfigStale>, C<AwaitCapable>.
 
 =item I<cursorID>
 
-=item I<startingFrom>
+=item I<startingFrom> (optional)
 
-=item I<numberReturned>
+Default is 0.
 
 =item I<documents>
 
+Arrayref of documents.
+
 =back
+
+=item decode($data, $options)
+
+Opposite to encode methods. Takes binary string C<$data> and returns hashref with parsed data in the same format as it uses to encode.
+
+C<$options> is a hashref. Now it can contain C<ixhash> flag, it says that documents should be returned as L<Tie::IxHash> for preserving keys order in the hash.
 
 =back
 

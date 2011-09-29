@@ -1,5 +1,9 @@
 Revision history for MongoDBx-Protocol
 
+0.03    Fri Sep 30, 2011
+        Method decode() support any binary message, decode_reply() removed.
+        reply() encodes OP_REPLY.
+
 0.02    Thu Sep 29, 2011
         POD fix.
         Remove some unneded files from package.
